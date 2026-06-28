@@ -6,22 +6,23 @@ import psycopg2
 from psycopg2.extras import execute_values
 from faker import Faker
 
-
+# --- Database connection settings ---
 HOST     = 'localhost'
 USER     = 'postgres'
 PASSWORD = '123'
 DATABASE = 'postgres'
 PORT     = '5432'
 
-
+# --- How many rows to generate ---
 CLIENTS_COUNT     = 10_000
 FREELANCERS_COUNT = 10_000
 PROJECTS_COUNT    = 50_000
 PAYMENTS_COUNT    = 100_000
-CHUNK_SIZE        = 5_000
+CHUNK_SIZE        = 5_000   # insert in chunks to avoid memory issues
 
 fake = Faker()
 
+# Available service categories
 CATEGORIES = [
     'Web Development',
     'Mobile Development',
@@ -32,12 +33,14 @@ CATEGORIES = [
     'DevOps',
 ]
 
+# Possible project statuses
 STATUSES = ['Completed', 'In Progress']
 
 
 def insert_categories(cursor):
     print("Inserting categories...")
     data = [(name,) for name in CATEGORIES]
+    # RETURNING category_id lets us get back the generated IDs
     execute_values(cursor, "INSERT INTO categories (category_name) VALUES %s RETURNING category_id", data)
     ids = [row[0] for row in cursor.fetchall()]
     print(f"Inserted {len(ids)} categories.")
@@ -53,9 +56,14 @@ def insert_clients(cursor):
         chunk = min(CHUNK_SIZE, CLIENTS_COUNT - start)
         data = []
         for _ in range(chunk):
-            cid = str(uuid.uuid4())
+            cid = str(uuid.uuid4())   # generate unique UUID for each client
             client_ids.append(cid)
-            data.append((cid, fake.company()[:100], fake.country()[:50], fake.email()[:100]))
+            data.append((
+                cid,
+                fake.company()[:100],  # truncate to fit VARCHAR(100)
+                fake.country()[:50],   # truncate to fit VARCHAR(50)
+                fake.email()[:100],
+            ))
         execute_values(cursor, query, data)
         print(f"  clients: {start + chunk}/{CLIENTS_COUNT}")
 
@@ -72,13 +80,13 @@ def insert_freelancers(cursor):
         chunk = min(CHUNK_SIZE, FREELANCERS_COUNT - start)
         data = []
         for _ in range(chunk):
-            fid = str(uuid.uuid4())
+            fid = str(uuid.uuid4())   # unique UUID for each freelancer
             freelancer_ids.append(fid)
             data.append((
                 fid,
                 fake.name(),
                 fake.email(),
-                round(random.uniform(10, 100), 2),
+                round(random.uniform(10, 100), 2),  # hourly rate between $10 and $100
             ))
         execute_values(cursor, query, data)
         print(f"  freelancers: {start + chunk}/{FREELANCERS_COUNT}")
@@ -96,6 +104,7 @@ def insert_projects(cursor, client_ids, freelancer_ids, category_ids):
         RETURNING project_id
     """
     project_ids = []
+    # generate start dates within the last 3 years
     start_range = datetime.now() - timedelta(days=365 * 3)
 
     for start in range(0, PROJECTS_COUNT, CHUNK_SIZE):
@@ -103,12 +112,12 @@ def insert_projects(cursor, client_ids, freelancer_ids, category_ids):
         data = []
         for _ in range(chunk):
             data.append((
-                random.choice(client_ids),
-                random.choice(freelancer_ids),
-                random.choice(category_ids),
-                fake.bs()[:100],
-                random.choice(STATUSES),
-                round(random.uniform(200, 5000), 2),
+                random.choice(client_ids),       # random client
+                random.choice(freelancer_ids),   # random freelancer
+                random.choice(category_ids),     # random category
+                fake.bs()[:100],                 # random business-sounding title
+                random.choice(STATUSES),         # Completed or In Progress
+                round(random.uniform(200, 5000), 2),  # budget between $200 and $5000
                 (start_range + timedelta(days=random.randint(0, 365 * 3))).date(),
             ))
         execute_values(cursor, query, data)
@@ -129,8 +138,8 @@ def insert_payments(cursor, project_ids):
         data = []
         for _ in range(chunk):
             data.append((
-                random.choice(project_ids),
-                round(random.uniform(50, 2500), 2),
+                random.choice(project_ids),           # random existing project
+                round(random.uniform(50, 2500), 2),   # payment amount between $50 and $2500
                 (start_range + timedelta(days=random.randint(0, 365 * 3))).date(),
             ))
         execute_values(cursor, query, data)
@@ -140,16 +149,18 @@ def insert_payments(cursor, project_ids):
 
 
 def main():
+    # connect to PostgreSQL
     conn = psycopg2.connect(
         host=HOST, user=USER, password=PASSWORD, dbname=DATABASE, port=PORT
     )
     try:
         with conn:
             with conn.cursor() as cur:
-                category_ids  = insert_categories(cur)
-                client_ids    = insert_clients(cur)
+                # insert in the correct order to satisfy foreign key constraints
+                category_ids   = insert_categories(cur)
+                client_ids     = insert_clients(cur)
                 freelancer_ids = insert_freelancers(cur)
-                project_ids   = insert_projects(cur, client_ids, freelancer_ids, category_ids)
+                project_ids    = insert_projects(cur, client_ids, freelancer_ids, category_ids)
                 insert_payments(cur, project_ids)
         print("\nAll data inserted successfully!")
     finally:
